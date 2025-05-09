@@ -1,0 +1,108 @@
+import xml.etree.ElementTree as ET
+import csv
+from collections import defaultdict
+
+# Load XML
+try:
+    tree = ET.parse("CPP_Ericsson_5G_Sample_2_Sites.xml")
+    root = tree.getroot()
+except FileNotFoundError:
+    print("Error: XML file not found.")
+    exit(1)
+except ET.ParseError:
+    print("Error: Failed to parse the XML file.")
+    exit(1)
+
+# Namespace mapping
+ns = {
+    "xn": "genericNrm.xsd",
+    "es": "EricssonSpecificAttributes.xsd"
+}
+
+# Phase 1: Collect data from all vsDataTypes by site
+nr_cells = defaultdict(dict)
+gnb_ids = defaultdict(str)
+sector_data = defaultdict(dict)
+
+# Parse each MeContext (site)
+for me in root.findall(".//xn:MeContext", ns):
+    site_id = me.attrib.get("id")
+
+    # Store sector carrier data for later matching
+    sector_carriers = {}
+
+    # Parse all attributes in VsDataContainer
+    for attrs in me.findall(".//xn:VsDataContainer/xn:attributes", ns):
+        vs_type = attrs.findtext("xn:vsDataType", "", namespaces=ns)
+
+        # NRCellDU → cellLocalId, nCI, frequencyDL, cellRange
+        if vs_type == "vsDataNRCellDU":
+            nci = attrs.findtext("es:vsDataNRCellDU/es:nCI", "", namespaces=ns)
+            if nci:
+                nr_cells[(site_id, nci)].update({
+                    "site_id": site_id,
+                    "nCI": nci,
+                    "cellLocalId": attrs.findtext("es:vsDataNRCellDU/es:cellLocalId", "", namespaces=ns),
+                    "frequencyDL": "",  # Placeholder for frequencyDL, to be filled later
+                    "cellRange": attrs.findtext("es:vsDataNRCellDU/es:cellRange", "", namespaces=ns),
+                    "nRCellDUId": attrs.findtext("es:vsDataNRCellDU/es:nRCellDUId", "", namespaces=ns)
+                })
+
+        # NRCellCU → nRTAC
+        elif vs_type == "vsDataNRCellCU":
+            nci = attrs.findtext("es:vsDataNRCellCU/es:nCI", "", namespaces=ns)
+            if nci:
+                nr_cells[(site_id, nci)]["nRTAC"] = attrs.findtext("es:vsDataNRCellCU/es:nRTAC", "", namespaces=ns)
+
+        # GNBDUFunction → gNBId
+        elif vs_type == "vsDataGNBDUFunction":
+            gnb_ids[site_id] = attrs.findtext("es:vsDataGNBDUFunction/es:gNBId", "", namespaces=ns)
+
+        # SectorCarrier → latitude, longitude, arfcnUL, arfcnDL
+        elif vs_type == "vsDataNRSectorCarrier":
+            nrs_carrier_id = attrs.findtext("es:vsDataNRSectorCarrier/es:nRSectorCarrierId", "", namespaces=ns)
+            if nrs_carrier_id:
+                sector_carriers[nrs_carrier_id] = {
+                    "frequencyDL": attrs.findtext("es:vsDataNRSectorCarrier/es:frequencyDL", "", namespaces=ns),
+                    "arfcnUL": attrs.findtext("es:vsDataNRSectorCarrier/es:arfcnUL", "", namespaces=ns),
+                    "arfcnDL": attrs.findtext("es:vsDataNRSectorCarrier/es:arfcnDL", "", namespaces=ns),
+                    "latitude": attrs.findtext("es:vsDataNRSectorCarrier/es:latitude", "", namespaces=ns),
+                    "longitude": attrs.findtext("es:vsDataNRSectorCarrier/es:longitude", "", namespaces=ns),
+                }
+
+    # Phase 2: Map frequencyDL from SectorCarrier to NRCellDU based on matching IDs
+    for (site_id, nci), cell in nr_cells.items():
+        nRCellDUId = cell.get("nRCellDUId")
+        if nRCellDUId:
+            # Check if there is a matching sector carrier
+            sector = sector_carriers.get(nRCellDUId)
+            if sector:
+                # Update the NRCellDU with frequencyDL from the matching sector carrier
+                cell["frequencyDL"] = sector.get("frequencyDL", "")
+
+    # Merge sector data (latitude, longitude, arfcnUL, arfcnDL)
+    if sector_carriers:
+        for carrier_id, sector in sector_carriers.items():
+            for site_id, cell in nr_cells.items():
+                if carrier_id == cell.get("nRCellDUId"):
+                    cell.update(sector)
+
+# Phase 3: Merge all data together
+merged_cells = []
+for (site_id, nci), cell in nr_cells.items():
+    cell["gNBId"] = gnb_ids.get(site_id, "")
+    merged_cells.append(cell)
+
+# Save to CSV
+output_file = "ericsson_5g_cells.csv"
+if merged_cells:
+    try:
+        with open(output_file, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=merged_cells[0].keys())
+            writer.writeheader()
+            writer.writerows(merged_cells)
+        print(f"Merged cell data saved to {output_file}")
+    except Exception as e:
+        print(f"Error while saving the CSV: {e}")
+else:
+    print("No data to save.")
