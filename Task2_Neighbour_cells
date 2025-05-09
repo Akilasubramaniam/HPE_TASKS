@@ -1,0 +1,59 @@
+from lxml import etree
+import pandas as pd
+import re
+
+# Parse XML safely with recovery enabled
+parser = etree.XMLParser(recover=True)
+tree = etree.parse('/content/CPP_Ericsson_5G_Sample_2_Sites.xml', parser)
+root = tree.getroot()
+
+# Namespaces
+ns = {'xn': 'genericNrm.xsd', 'es': 'EricssonSpecificAttributes.xsd'}
+
+rows = []
+
+for me_context in root.findall(".//xn:MeContext", ns):
+    gnb_id = me_context.get('id')
+
+    # gNB Numeric ID
+    gnb_numeric_elem = me_context.find(".//es:vsDataGNBCUCPFunction/es:gNBId", ns)
+    gnb_numeric_id = gnb_numeric_elem.text if gnb_numeric_elem is not None else 'NA'
+
+    # Home Cell ID
+    home_cell_id_elem = me_context.find(".//es:nRCellCUId", ns)
+    home_cell_id = home_cell_id_elem.text if home_cell_id_elem is not None else 'NA'
+
+    # Home Cell Global Cell ID from nRFrequencyRef
+    global_cell_id = 'NA'
+    freq_ref_elem = me_context.find(".//es:vsDataExternalNRCellCU/es:nRFrequencyRef", ns)
+    if freq_ref_elem is not None:
+        match = re.search(r'vsDataNRFrequency=(\d+)', freq_ref_elem.text)
+        if match:
+            global_cell_id = f"NR_{match.group(1)}"
+
+    # Neighbour Cell Info from vsDataExternalNRCellCU ids
+    neighbour_ids = []
+    for container in me_context.findall(".//xn:VsDataContainer", ns):
+        vs_data_type = container.find("./xn:attributes/xn:vsDataType", ns)
+        if vs_data_type is not None and vs_data_type.text == "vsDataExternalNRCellCU":
+            container_id = container.get("id")
+            if container_id:
+                neighbour_ids.append(container_id)
+
+    if neighbour_ids:
+        for neighbor in neighbour_ids:
+            rows.append([gnb_id, gnb_numeric_id, home_cell_id, global_cell_id, neighbor])
+    else:
+        rows.append([gnb_id, gnb_numeric_id, home_cell_id, global_cell_id, 'NA'])
+
+# Convert to DataFrame
+df = pd.DataFrame(rows, columns=[
+    'home gNB ID', 'gNB Numeric ID', 'Home Cell ID', 'Home Cell Global Cell ID', 'Neighbour Cell Info'
+])
+
+# Show preview
+df.head()
+
+# Save CSV
+df.to_csv('/content/output_5g_cells_clean.csv', index=False)
+print("✅ All done! CSV saved as 'output_5g_cells_clean.csv'")
