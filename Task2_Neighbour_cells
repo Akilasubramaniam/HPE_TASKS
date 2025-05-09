@@ -55,5 +55,5 @@ df = pd.DataFrame(rows, columns=[
 df.head()
 
 # Save CSV
-df.to_csv('/content/output_5g_cells_clean.csv', index=False)
+df.to_csv('/content/output_5g_cells_neighbour_cells.csv', index=False)
 print("All done! CSV saved as 'output_5g_cells_neighbour_cells.csv'")
